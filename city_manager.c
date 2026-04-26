@@ -51,6 +51,57 @@ void log_action(const char *district, const char *user, const char *role, const 
     chmod(path, 0644);
 }
 
+/* ── AI-assisted filter functions ── */
+
+int parse_condition(const char *input, char *field, char *op, char *value) {
+    // Copy input so we can tokenize it
+    char tmp[256];
+    strncpy(tmp, input, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    // Split by ':'
+    char *first = strchr(tmp, ':');
+    if (!first) return 0;
+    *first = '\0';
+    char *second = strchr(first + 1, ':');
+    if (!second) return 0;
+    *second = '\0';
+
+    strncpy(field, tmp, 63);        field[63] = '\0';
+    strncpy(op, first + 1, 7);      op[7] = '\0';
+    strncpy(value, second + 1, 63); value[63] = '\0';
+    return 1;
+}
+
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+    if (strcmp(field, "severity") == 0) {
+        int v = atoi(value);
+        if (strcmp(op, "==") == 0) return r->severity == v;
+        if (strcmp(op, "!=") == 0) return r->severity != v;
+        if (strcmp(op, "<")  == 0) return r->severity <  v;
+        if (strcmp(op, "<=") == 0) return r->severity <= v;
+        if (strcmp(op, ">")  == 0) return r->severity >  v;
+        if (strcmp(op, ">=") == 0) return r->severity >= v;
+    } else if (strcmp(field, "category") == 0) {
+        int cmp = strcmp(r->category, value);
+        if (strcmp(op, "==") == 0) return cmp == 0;
+        if (strcmp(op, "!=") == 0) return cmp != 0;
+    } else if (strcmp(field, "inspector") == 0) {
+        int cmp = strcmp(r->inspector, value);
+        if (strcmp(op, "==") == 0) return cmp == 0;
+        if (strcmp(op, "!=") == 0) return cmp != 0;
+    } else if (strcmp(field, "timestamp") == 0) {
+        time_t v = (time_t)atol(value);
+        if (strcmp(op, "==") == 0) return r->timestamp == v;
+        if (strcmp(op, "!=") == 0) return r->timestamp != v;
+        if (strcmp(op, "<")  == 0) return r->timestamp <  v;
+        if (strcmp(op, "<=") == 0) return r->timestamp <= v;
+        if (strcmp(op, ">")  == 0) return r->timestamp >  v;
+        if (strcmp(op, ">=") == 0) return r->timestamp >= v;
+    }
+    return 0;
+}
+
 /* ── commands ── */
 
 void cmd_add(const char *district, const char *user, const char *role) {
@@ -247,21 +298,78 @@ void cmd_update_threshold(const char *district, int value, const char *role) {
     log_action(district, "system", role, "update_threshold");
 }
 
+void cmd_filter(const char *district, int cond_count, char **conditions) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/reports.dat", district);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { perror("open reports.dat"); return; }
+
+    Report r;
+    int found = 0;
+    while (read(fd, &r, sizeof(r)) == sizeof(r)) {
+        int match = 1;
+        for (int i = 0; i < cond_count; i++) {
+            char field[64], op[8], value[64];
+            if (!parse_condition(conditions[i], field, op, value)) {
+                fprintf(stderr, "Invalid condition: %s\n", conditions[i]);
+                match = 0;
+                break;
+            }
+            if (!match_condition(&r, field, op, value)) {
+                match = 0;
+                break;
+            }
+        }
+        if (match) {
+            found++;
+            char ts[64];
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", localtime(&r.timestamp));
+            printf("--- Report #%d ---\n", r.id);
+            printf("  Inspector  : %s\n", r.inspector);
+            printf("  GPS        : %.4f, %.4f\n", r.latitude, r.longitude);
+            printf("  Category   : %s\n", r.category);
+            printf("  Severity   : %d\n", r.severity);
+            printf("  Timestamp  : %s\n", ts);
+            printf("  Description: %s\n\n", r.description);
+        }
+    }
+    close(fd);
+    if (found == 0)
+        printf("No reports matched the given conditions.\n");
+}
+
 /* ── main ── */
 
 int main(int argc, char *argv[]) {
     char *role = NULL, *user = NULL, *command = NULL;
     char *arg1 = NULL, *arg2 = NULL;
+    int filter_cond_count = 0;
+    char **filter_conditions = NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--role") == 0 && i+1 < argc)                  role = argv[++i];
-        else if (strcmp(argv[i], "--user") == 0 && i+1 < argc)             user = argv[++i];
-        else if (strcmp(argv[i], "--add") == 0 && i+1 < argc)              { command = "add";              arg1 = argv[++i]; }
-        else if (strcmp(argv[i], "--list") == 0 && i+1 < argc)             { command = "list";             arg1 = argv[++i]; }
-        else if (strcmp(argv[i], "--view") == 0 && i+2 < argc)             { command = "view";             arg1 = argv[++i]; arg2 = argv[++i]; }
-        else if (strcmp(argv[i], "--remove_report") == 0 && i+2 < argc)    { command = "remove_report";    arg1 = argv[++i]; arg2 = argv[++i]; }
-        else if (strcmp(argv[i], "--update_threshold") == 0 && i+2 < argc) { command = "update_threshold"; arg1 = argv[++i]; arg2 = argv[++i]; }
-        else if (strcmp(argv[i], "--filter") == 0 && i+1 < argc)           { command = "filter";           arg1 = argv[++i]; }
+        if (strcmp(argv[i], "--role") == 0 && i+1 < argc)
+            role = argv[++i];
+        else if (strcmp(argv[i], "--user") == 0 && i+1 < argc)
+            user = argv[++i];
+        else if (strcmp(argv[i], "--add") == 0 && i+1 < argc)
+            { command = "add"; arg1 = argv[++i]; }
+        else if (strcmp(argv[i], "--list") == 0 && i+1 < argc)
+            { command = "list"; arg1 = argv[++i]; }
+        else if (strcmp(argv[i], "--view") == 0 && i+2 < argc)
+            { command = "view"; arg1 = argv[++i]; arg2 = argv[++i]; }
+        else if (strcmp(argv[i], "--remove_report") == 0 && i+2 < argc)
+            { command = "remove_report"; arg1 = argv[++i]; arg2 = argv[++i]; }
+        else if (strcmp(argv[i], "--update_threshold") == 0 && i+2 < argc)
+            { command = "update_threshold"; arg1 = argv[++i]; arg2 = argv[++i]; }
+        else if (strcmp(argv[i], "--filter") == 0 && i+1 < argc) {
+            command = "filter";
+            arg1 = argv[++i];
+            // everything after the district name are conditions
+            filter_conditions = argv + i + 1;
+            filter_cond_count = argc - i - 1;
+            break; // stop parsing, rest are conditions
+        }
     }
 
     if (!role || !user || !command) {
@@ -279,6 +387,8 @@ int main(int argc, char *argv[]) {
         cmd_remove_report(arg1, atoi(arg2), role);
     else if (strcmp(command, "update_threshold") == 0)
         cmd_update_threshold(arg1, atoi(arg2), role);
+    else if (strcmp(command, "filter") == 0)
+        cmd_filter(arg1, filter_cond_count, filter_conditions);
     else
         printf("Command '%s' not yet implemented.\n", command);
 
