@@ -7,6 +7,8 @@
 #include <sys/types.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define NAME_LEN     64
 #define CATEGORY_LEN 32
@@ -155,6 +157,25 @@ void cmd_add(const char *district, const char *user, const char *role) {
     symlink(link_target, link_name);
 
     printf("Report #%d added to %s.\n", r.id, district);
+    // Notify monitor via SIGUSR1
+    int monitor_fd = open(".monitor_pid", O_RDONLY);
+    if (monitor_fd < 0) {
+        log_action(district, user, role, "add - monitor could not be informed (no PID file)");
+    } else {
+        char pid_buf[32];
+        memset(pid_buf, 0, sizeof(pid_buf));
+        read(monitor_fd, pid_buf, sizeof(pid_buf) - 1);
+        close(monitor_fd);
+
+        pid_t monitor_pid = (pid_t)atoi(pid_buf);
+        if (monitor_pid <= 0) {
+            log_action(district, user, role, "add - monitor could not be informed (invalid PID)");
+        } else if (kill(monitor_pid, SIGUSR1) != 0) {
+            log_action(district, user, role, "add - monitor could not be informed (signal failed)");
+        } else {
+            log_action(district, user, role, "add - monitor notified via SIGUSR1");
+        }
+    }
     log_action(district, user, role, "add");
 }
 
@@ -297,6 +318,53 @@ void cmd_update_threshold(const char *district, int value, const char *role) {
     printf("Threshold for district '%s' updated to %d.\n", district, value);
     log_action(district, "system", role, "update_threshold");
 }
+void cmd_remove_district(const char *district, const char *role) {
+    if (strcmp(role, "manager") != 0) {
+        fprintf(stderr, "Permission denied: only managers can remove districts.\n");
+        return;
+    }
+
+    // Safety check — make sure district name is not empty or dangerous
+    if (!district || strlen(district) == 0 || strchr(district, '/') != NULL) {
+        fprintf(stderr, "Invalid district name.\n");
+        return;
+    }
+
+    // Check district exists
+    struct stat st;
+    if (stat(district, &st) != 0) {
+        fprintf(stderr, "District '%s' does not exist.\n", district);
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        return;
+    }
+
+    if (pid == 0) {
+        // Child process: run rm -rf <district>
+        execl("/bin/rm", "rm", "-rf", district, NULL);
+        perror("execl"); // only reached if execl fails
+        exit(1);
+    } else {
+        // Parent: wait for child to finish
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            printf("District '%s' removed.\n", district);
+
+            // Remove the symlink
+            char link_name[256];
+            snprintf(link_name, sizeof(link_name), "active_reports-%s", district);
+            unlink(link_name);
+            printf("Symlink '%s' removed.\n", link_name);
+        } else {
+            fprintf(stderr, "Failed to remove district '%s'.\n", district);
+        }
+    }
+}
 
 void cmd_filter(const char *district, int cond_count, char **conditions) {
     char path[256];
@@ -348,29 +416,30 @@ int main(int argc, char *argv[]) {
     char **filter_conditions = NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--role") == 0 && i+1 < argc)
-            role = argv[++i];
-        else if (strcmp(argv[i], "--user") == 0 && i+1 < argc)
-            user = argv[++i];
-        else if (strcmp(argv[i], "--add") == 0 && i+1 < argc)
-            { command = "add"; arg1 = argv[++i]; }
-        else if (strcmp(argv[i], "--list") == 0 && i+1 < argc)
-            { command = "list"; arg1 = argv[++i]; }
-        else if (strcmp(argv[i], "--view") == 0 && i+2 < argc)
-            { command = "view"; arg1 = argv[++i]; arg2 = argv[++i]; }
-        else if (strcmp(argv[i], "--remove_report") == 0 && i+2 < argc)
-            { command = "remove_report"; arg1 = argv[++i]; arg2 = argv[++i]; }
-        else if (strcmp(argv[i], "--update_threshold") == 0 && i+2 < argc)
-            { command = "update_threshold"; arg1 = argv[++i]; arg2 = argv[++i]; }
-        else if (strcmp(argv[i], "--filter") == 0 && i+1 < argc) {
-            command = "filter";
-            arg1 = argv[++i];
-            // everything after the district name are conditions
-            filter_conditions = argv + i + 1;
-            filter_cond_count = argc - i - 1;
-            break; // stop parsing, rest are conditions
-        }
+    if (strcmp(argv[i], "--role") == 0 && i+1 < argc)
+        role = argv[++i];
+    else if (strcmp(argv[i], "--user") == 0 && i+1 < argc)
+        user = argv[++i];
+    else if (strcmp(argv[i], "--add") == 0 && i+1 < argc)
+        { command = "add"; arg1 = argv[++i]; }
+    else if (strcmp(argv[i], "--list") == 0 && i+1 < argc)
+        { command = "list"; arg1 = argv[++i]; }
+    else if (strcmp(argv[i], "--view") == 0 && i+2 < argc)
+        { command = "view"; arg1 = argv[++i]; arg2 = argv[++i]; }
+    else if (strcmp(argv[i], "--remove_report") == 0 && i+2 < argc)
+        { command = "remove_report"; arg1 = argv[++i]; arg2 = argv[++i]; }
+    else if (strcmp(argv[i], "--update_threshold") == 0 && i+2 < argc)
+        { command = "update_threshold"; arg1 = argv[++i]; arg2 = argv[++i]; }
+    else if (strcmp(argv[i], "--filter") == 0 && i+1 < argc) {
+        command = "filter";
+        arg1 = argv[++i];
+        filter_conditions = argv + i + 1;
+        filter_cond_count = argc - i - 1;
+        break;
     }
+    else if (strcmp(argv[i], "--remove_district") == 0 && i+1 < argc)
+        { command = "remove_district"; arg1 = argv[++i]; }
+}
 
     if (!role || !user || !command) {
         fprintf(stderr, "Usage: ./city_manager --role <role> --user <user> --<command> <args>\n");
@@ -389,6 +458,8 @@ int main(int argc, char *argv[]) {
         cmd_update_threshold(arg1, atoi(arg2), role);
     else if (strcmp(command, "filter") == 0)
         cmd_filter(arg1, filter_cond_count, filter_conditions);
+    else if (strcmp(command, "remove_district") == 0)
+        cmd_remove_district(arg1, role);
     else
         printf("Command '%s' not yet implemented.\n", command);
 

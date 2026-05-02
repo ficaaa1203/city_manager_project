@@ -2,3 +2,9 @@
 1777219102	system	manager	update_threshold
 1777219205	alice	manager	add
 1777219410	alice	manager	add
+1777747756	alice	manager	add - monitor notified via SIGUSR1
+1777747756	alice	manager	add
+1777747813	testnopid	manager	add - monitor could not be informed (no PID file)
+1777747813	testnopid	manager	add
+1777747886	alice	manager	add - monitor could not be informed (no PID file)
+1777747886	alice	manager	add
