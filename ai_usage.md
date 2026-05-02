@@ -32,3 +32,32 @@ time_t for timestamp), then applies the operator.
   with a raw string would give wrong results
 - The AI generated correct logic but I had to review each line carefully,
   especially the pointer arithmetic in `parse_condition`
+
+
+
+  ## Phase 2 – Process and Signal Architecture
+
+### What I Asked
+I asked for guidance on structuring the `monitor_reports` program, specifically:
+- How to write a PID to a file at startup and delete it on exit
+- How to use `sigaction` (not `signal()`) to handle SIGUSR1 and SIGINT
+- How to use `pause()` in a loop to wait for signals efficiently
+
+### What Was Generated
+The overall structure of `monitor_reports.c` was developed with AI assistance,
+including the signal handler setup with `sigaction` and the `volatile int running`
+flag pattern for clean shutdown on SIGINT.
+
+### What I Changed
+- Reviewed that `write()` is used inside signal handlers instead of `printf`
+  (printf is not async-signal-safe)
+- Verified the `SA_RESTART` flag is set for SIGUSR1 so interrupted system calls
+  are restarted automatically
+- The PID reading and `kill()` logic in `cmd_add` was written and verified manually
+
+### What I Learned
+- Why `signal()` is discouraged and `sigaction` is preferred (more portable,
+  explicit mask and flag control)
+- Why only async-signal-safe functions can be called inside signal handlers
+- How `pause()` avoids busy-waiting while still responding to signals
+- How `fork()` + `execl()` works for running external commands from C
