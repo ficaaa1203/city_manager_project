@@ -176,7 +176,7 @@ void cmd_add(const char *district, const char *user, const char *role) {
             log_action(district, user, role, "add - monitor notified via SIGUSR1");
         }
     }
-    log_action(district, user, role, "add");
+    
 }
 
 void cmd_list(const char *district) {
