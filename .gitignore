@@ -2,4 +2,8 @@ city_manager
 city_manager.dSYM/
 monitor_reports
 monitor_reports.dSYM/
+scorer
+scorer.dSYM/
+city_hub
+city_hub.dSYM/
 *.o
