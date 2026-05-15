@@ -61,3 +61,34 @@ flag pattern for clean shutdown on SIGINT.
 - Why only async-signal-safe functions can be called inside signal handlers
 - How `pause()` avoids busy-waiting while still responding to signals
 - How `fork()` + `execl()` works for running external commands from C
+
+
+## Phase 3 – Pipes and Redirects
+
+### What I Asked
+I asked for help structuring the `city_hub` program, specifically:
+- How to set up a pipe between a parent and child process
+- How to use `dup2()` to redirect a child's stdout to the write end of a pipe
+- How to read structured messages line by line from a pipe in the parent
+- How to spawn multiple scorer processes in parallel and collect their output
+
+### What Was Generated
+The overall architecture of `city_hub.c` was developed with AI assistance,
+including the `pipe()` + `fork()` + `dup2()` + `execl()` pattern for both
+`hub_mon` and the scorer processes, and the line-by-line message parsing loop
+in `run_hub_mon`.
+
+### What I Changed
+- Verified that the write end of each pipe is closed in the parent after forking,
+  otherwise `read()` would never return EOF
+- Reviewed the message prefix format (`MSG:` / `ERR:`) to ensure hub_mon can
+  distinguish between normal messages and error conditions
+- The duplicate monitor detection logic in `monitor_reports.c` (using `kill(pid, 0)`)
+  was reviewed carefully — `kill` with signal 0 checks if a process exists without
+  actually sending a signal
+
+### What I Learned
+- How `dup2()` redirects file descriptors at the OS level
+- Why both ends of a pipe must be properly closed to avoid deadlocks
+- How to coordinate multiple child processes and collect their output in order
+- The `MSG:`/`ERR:` prefix pattern for structured inter-process text communication
